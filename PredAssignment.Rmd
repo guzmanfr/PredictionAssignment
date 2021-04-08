@@ -1,0 +1,196 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Francisco J. Guzman"
+date: "3/18/2021"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+# Clean-up environment for previous runs
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+library(caret)
+library(knitr)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+library(lattice)
+library(rattle)
+```
+
+## 1. Synopsis
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. In this project, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+We aim to predict the manner in which the participants performed the exercise, which is stored in the “classe” variable in the training set. We will try to predict the classe value (A, B, C, D, or E) for the 20 test cases and submit it in the quizz.
+
+## 2. Data Loading, Clean-up and Partition
+
+### 2.1 Data Loading and Clean-up
+
+```{r dataLoading, echo = FALSE}
+setwd("~/Learning_R/MachineLearning/Assignment")
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# Training data file download
+if(!file.exists("pml-training.csv")) {
+    download.file(trainURL, destfile = "pml-training.csv")
+}
+
+# Test data file download
+if(!file.exists("pml-testing.csv")) {
+    download.file(testURL, destfile = "pml-testing.csv")
+}
+
+# Clean-up memory
+rm(trainURL)
+rm(testURL)
+
+trainData <- read.csv("pml-training.csv", na.strings = c('#DIV/0!', '', 'NA'))
+testData <- read.csv("pml-testing.csv", na.strings = c('#DIV/0!', '', 'NA'))
+```
+
+The datasets have 160 variables. The first task is to clean NAs, Near Zero variance (NZV) variables and the first columns (used for identification only).
+
+```{r cleanData, echo = FALSE}
+
+# remove variables with Near Zero Variance
+NZV <- nearZeroVar(trainData)
+trainData <- trainData[, -NZV]
+testData  <- testData[, -NZV]
+
+# Clean-up memory
+rm(NZV)
+
+# remove variables that are mostly NAs
+# isNA <- sapply(trainData, function(x) mean(is.na(x))) > 0.95
+isNA <- sapply(testData, function(x) any(is.na(x) | x == ""))
+trainData <- trainData[, isNA == FALSE]
+testData  <- testData[, isNA == FALSE]
+# Clean-up memory
+rm(isNA)
+
+# Removal of identification only variables (columns 1 to 5)
+trainData <- trainData[, -(1:5)]
+testData  <- testData[, -(1:5)]
+
+dim(trainData)
+dim(testData)
+```
+
+### 2.2. Data Partitioning
+
+As per recommendation of the course __ Practical Machine Learning__ , we will be seggregating our org_training_data into 2 different parts, one is the training set (consisiting 70% of the total data) and test set (consisting 30% of the total data)
+
+```{r dataPartition, echo = FALSE}
+inTrain <- createDataPartition(trainData$classe, p = 0.7, list = FALSE)
+training <- trainData[inTrain,]
+testing <- trainData[-inTrain,]
+
+# Clean-up memory
+rm(inTrain)
+
+dim(training)
+dim(testing)
+```
+
+## 3. Correlation Analysis
+
+A correlation among variables is analysed before proceeding to the modeling procedures.
+
+```{r CorrAnalisys, echo = FALSE}
+corMatrix <- cor(training[, -54])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", 
+         tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+```         
+
+The graph above shows highly correlated variables in dark colors which are quite disperse so PCA (Principal Components Analysis) is not considered required as a pre-processing step to the datasets.
+
+
+## 4. Prediction Model Building
+
+Three methods will be applied to model the regressions (in the Train dataset) and the best one (with higher accuracy when applied to the Test dataset) will be used for the quiz predictions. The methods are: Random Forests, Decision Tree and Generalized Boosted Model, as described below. A Confusion Matrix is plotted at the end of each analysis to better visualize the accuracy of the models.
+
+### 4.1. Method 1: Random Forest
+
+```{r modelFitRF, echo=FALSE}
+# Model fit Random Forest
+set.seed(78697)
+controlRF <- trainControl(method = "cv", number = 3, verboseIter = FALSE)
+modFitRF <- train(classe ~ ., data = training, 
+            method = "rf", trControl = controlRF)
+modFitRF$finalModel
+
+# Random Forest Prediction using Test dataset
+predictRF <- predict(modFitRF, newdata = testing)
+confmatRF <- confusionMatrix(predictRF, testing$classe)
+confmatRF
+
+plot(confmatRF$table, col = confmatRF$byClass, 
+     main = paste("Random Forest - Accuracy Level =",
+                  round(confmatRF$overall['Accuracy'], 4)))
+# dev.off()
+```
+
+### 4.2. Method 2: Decision Trees
+
+```{r modelFitDT, echo=FALSE}
+set.seed(78697)
+
+modFitDT <- rpart(classe ~ ., data = training, method="class")
+fancyRpartPlot(modFitDT)
+
+# Predict Desicion Trees
+predictDT <- predict(modFitDT, newdata = testing, type = "class")
+confmatDT <- confusionMatrix(predictDT, testing$classe)
+confmatDT
+
+# plot matrix results
+plot(confmatDT$table, col = confmatDT$byClass, 
+     main = paste("Decision Tree - Accuracy =",
+                  round(confmatDT$overall['Accuracy'], 4)))
+# dev.off()
+```
+
+### 4.3. Method 3: Generalized Boosted Model
+
+```{r modelFitGBM, echo = FALSE}
+set.seed(78697)
+
+ctrlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 2)
+modFitGBM  <- train(classe ~ ., data = training, method = "gbm",
+                  trControl = ctrlGBM, verbose = FALSE)
+modFitGBM$finalModel
+
+# Predict GBM
+predictGBM <- predict(modFitGBM, newdata = testing)
+confmatGBM <- confusionMatrix(table(predictGBM, testing$classe))
+confmatGBM
+
+# Plot matrix results
+plot(confmatGBM$table, col = confmatGBM$byClass, 
+     main = paste("Generalized Boosted Model - Accuracy =",
+                  round(confmatGBM$overall['Accuracy'], 4)))
+# dev.off()
+```
+
+### 4.4. Models evaluation
+
+Random Forest accuracy: 0.998
+Decision Trees accuracy: 0.7443
+Global Boosted Model accuracy: 0.9878
+
+
+## 5. Predictions using best accuracy model
+
+As shown, best accuracy model was Random Forest, so prediction execution with Test Data
+
+```{r predictBest, echo = FALSE}
+
+cat("Predictions: ", paste(predict(modFitRF, testData)))
+```
